@@ -5,7 +5,7 @@ from typing import TypedDict, List, Dict, Any
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
+#from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools.tavily_search import TavilySearchResults
 from fastapi import FastAPI, Response
@@ -14,11 +14,13 @@ from pydantic import BaseModel
 from openai import OpenAI # 用于 TTS 语音合成
 from pptx import Presentation # 用于 PPT 生成
 from pptx.util import Inches # PPT 尺寸
-
+# 原来的: from langchain_openai import ChatOpenAI
+# 修改为:
+from langchain_google_genai import ChatGoogleGenerativeAI
 load_dotenv()
 
 # --- 0. 初始化 OpenAI 客户端 (用于 TTS) ---
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+#openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- 1. 定义状态 (State) ---
 class AgentState(TypedDict):
@@ -35,7 +37,16 @@ class AgentState(TypedDict):
     ppt_b64: str # 新增: PPT 文件 (Base64 编码)
 
 # --- 2. 初始化 ---
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+#llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+#search_tool = TavilySearchResults(max_results=3)
+# --- 2. 初始化 ---
+# 使用 Gemini 1.5 Flash (免费/超低价)
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash",
+    temperature=0,
+    google_api_key=os.getenv("GOOGLE_API_KEY")
+)
+
 search_tool = TavilySearchResults(max_results=3)
 
 # --- 3. 定义节点 (Nodes) ---
