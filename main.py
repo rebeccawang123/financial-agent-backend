@@ -35,7 +35,7 @@ class AgentState(TypedDict):
 # --- 2. 初始化 ---
 # 使用 Gemini 1.5 Flash (免费且快)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-1.5-flash-001",
     temperature=0,
     google_api_key=os.getenv("GOOGLE_API_KEY")
 )
