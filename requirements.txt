@@ -2,7 +2,7 @@ fastapi
 uvicorn
 langgraph
 langchain
-langchain-google-genai
+#langchain-google-genai
 langchain-community
 tavily-python
 python-dotenv
@@ -10,3 +10,4 @@ pydantic
 python-pptx
 edge-tts
 aiofiles
+langchain_openai
