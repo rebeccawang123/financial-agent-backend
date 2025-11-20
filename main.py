@@ -1,162 +1,155 @@
 import os
 import json
 import base64
-import asyncio # 引入 asyncio
 from typing import TypedDict, List, Dict, Any
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
-# 切换为 Google Gemini
-#from langchain_google_genai import ChatGoogleGenerativeAI 
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools.tavily_search import TavilySearchResults
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pptx import Presentation
-import edge_tts # 引入 Edge TTS
-from langchain_openai import ChatOpenAI
+import edge_tts
 
 load_dotenv()
 
 # --- 1. 定义状态 ---
 class AgentState(TypedDict):
     query: str
+    raw_search_results: List[Dict] # 存储原始搜索结果用于匹配 URL
     news_data: List[str]
-    sources: List[Dict[str, str]]
-    podcast_insights: str
     logs: List[str]
     final_report: str
-    report_chinese: str
-    report_english: str
-    audio_chinese_b64: str
-    audio_english_b64: str
-    ppt_b64: str
+    audio_b64: str
 
 # --- 2. 初始化 ---
-# 使用 Gemini 1.5 Flash (免费且快)
-# --- 2. 初始化 ---
-# 使用 DeepSeek V3 (性价比之王)
+# 推荐使用 DeepSeek V3 (逻辑强且便宜) 或 GPT-4o
 llm = ChatOpenAI(
     model="deepseek-chat", 
     api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com",  # ⬅️ 关键：指向 DeepSeek 官方地址
-    temperature=0
+    base_url="https://api.deepseek.com",
+    temperature=0.1 # 低温度保证引用准确
 )
 
-search_tool = TavilySearchResults(max_results=3)
+# 增加搜索数量，Tavily 一次最多 5-10 条，我们可能需要多次调用
+search_tool = TavilySearchResults(max_results=5) 
 
-# --- 3. 定义节点 ---
+# --- 3. 节点定义 ---
 
-def news_node(state: AgentState):
-    """新闻搜集员"""
-    query = state.get("query", "Macro Finance")
+def search_node(state: AgentState):
+    """宏观数据搜集员 (搜索 10+ 个源)"""
     logs = state.get("logs", [])
-    logs.append(f"🕵️ [News Agent] 正在使用 Gemini Flash 搜索: '{query}'...")
+    logs.append("🌍 [Macro Scout] 正在启动全网宏观数据扫描...")
     
-    try:
-        results = search_tool.invoke(f"{query} financial news bloomberg wsj")
-        news_content = [res['content'] for res in results]
-        sources = [{"title": res['content'][:30]+"...", "url": res['url']} for res in results]
-        logs.append(f"✅ [News Agent] 成功抓取到 {len(results)} 条相关新闻。")
-    except Exception as e:
-        logs.append("⚠️ [News Agent] 搜索 API 未响应，使用备用数据流。")
-        news_content = ["Market data unavailable due to network."]
-        sources = []
+    # 定义两个维度的搜索词，确保覆盖面达到 10 个源
+    search_queries = [
+        "latest US GDP CPI inflation Fed interest rate data official",
+        "China GDP PMI manufacturing exports imports data current month",
+        "Global commodities gold oil bitcoin price trends today",
+        "Major central banks policy rates and bond yields 10y"
+    ]
+    
+    all_results = []
+    seen_urls = set()
+    
+    for q in search_queries:
+        try:
+            logs.append(f"🔍 搜索维度: {q}...")
+            results = search_tool.invoke(q)
+            
+            for res in results:
+                if res['url'] not in seen_urls:
+                    seen_urls.add(res['url'])
+                    # 给每个内容打上 ID，方便 LLM 引用
+                    all_results.append({
+                        "id": len(all_results) + 1,
+                        "url": res['url'],
+                        "content": res['content'],
+                        "title": res['url'] # 简化标题
+                    })
+        except Exception as e:
+            print(f"Search error: {e}")
+            
+    logs.append(f"✅ [Macro Scout] 共采集到 {len(all_results)} 个独立宏观数据源。")
+    
+    # 将结果格式化为文本喂给 LLM
+    context_text = ""
+    for item in all_results:
+        context_text += f"Source_ID [{item['id']}] (URL: {item['url']}): {item['content']}\n\n"
         
-    return {"news_data": news_content, "sources": sources, "logs": logs}
-
-def podcast_node(state: AgentState):
-    """播客监听员"""
-    logs = state.get("logs", [])
-    logs.append("🎧 [Pod Listener] 正在接入 RSS 源: 'All-In Podcast'...")
-    mock_insight = "Chamath: AI infrastructure capex is peaking. Sacks: US Debt ceiling will be the main topic in 2025."
-    return {"podcast_insights": mock_insight, "logs": logs}
+    return {"raw_search_results": all_results, "news_data": [context_text], "logs": logs}
 
 def analyst_node(state: AgentState):
-    """首席分析师"""
+    """首席宏观分析师 (严格格式控制)"""
     logs = state.get("logs", [])
-    logs.append("🧠 [Chief Analyst] Gemini 1.5 Flash 正在生成双语研报...")
+    logs.append("🧠 [Chief Analyst] 正在进行数据交叉验证与合成计算...")
     
-    news = "\n".join(state['news_data'])
-    podcast = state['podcast_insights']
+    context = state['news_data'][0]
     
-    # 英文提示词
-    prompt_en = ChatPromptTemplate.from_template("""
-    You are a Wall Street Analyst. Based on: {news} and {podcast}.
-    Write a brief "Daily Financial Briefing". Use Markdown.
+    # 核心 Prompt：强制要求数字链接和公式展示
+    prompt = ChatPromptTemplate.from_template("""
+    你是一位华尔街顶级宏观对冲基金的首席策略师。请基于提供的【数据源列表】，撰写一份《全球宏观深度研报》。
+
+    【严格约束】
+    1. **引用即链接**：报告中出现的所有核心数据（如 GDP、CPI、利率、价格），必须做成 Markdown 链接格式，指向原始 URL。
+       - 格式：`[数值](URL)`
+       - 错误示范：GDP is 5.2% (Source 1)
+       - 正确示范：US GDP grew by [5.2%](https://bea.gov/...)
+    
+    2. **公式展示**：如果你在报告中对数据进行了加工（如计算实际利率、价差、同比环比变化），必须在旁边用括号注明计算公式。
+       - 格式：`[合成数据](URL) (计算公式: 名义利率 A - 通胀率 B)`
+       - 例子：Real Yield is [2.1%](url1) (Formula: [10Y Yield 5.1%](url2) - [CPI 3.0%](url3))
+
+    3. **数据源要求**：必须覆盖至少 5 个不同的宏观指标/来源。
+
+    【报告结构】
+    ## 🎯 核心摘要 (Key Takeaways)
+    ## 🌏 全球宏观概览 (Global Macro)
+    ## 💵 资产定价模型 (Valuation Models) -> 这里展示合成数据和公式
+    ## 💡 交易策略 (Actionable Insights)
+    ## 🔗 数据源列表 (Data Sources) -> 列出所有用到的 URL
+
+    【数据源列表】:
+    {context}
     """)
-    chain_en = prompt_en | llm
-    response_en = chain_en.invoke({"news": news, "podcast": podcast})
     
-    # 中文提示词
-    prompt_zh = ChatPromptTemplate.from_template("""
-    你是华尔街分析师。基于: {news} 和 {podcast}。
-    写一份简短的【每日金融晨报】。使用 Markdown 格式，包含 Emoji。
-    """)
-    chain_zh = prompt_zh | llm
-    response_zh = chain_zh.invoke({"news": news, "podcast": podcast})
+    chain = prompt | llm
+    response = chain.invoke({"context": context})
     
-    logs.append("🚀 [System] 报告生成完毕。")
-    return {
-        "report_english": response_en.content,
-        "report_chinese": response_zh.content,
-        "logs": logs
-    }
+    logs.append("🚀 [System] 深度研报构建完成。")
+    return {"final_report": response.content, "logs": logs}
 
-# --- ⚠️ 核心修改: 使用 Edge TTS (异步) ---
-
-
-def speech_node(state: AgentState):
-    """调试模式：跳过语音合成"""
+async def speech_node(state: AgentState):
+    """语音合成 (仅朗读摘要，避免读 URL)"""
     logs = state.get("logs", [])
-    logs.append("⚠️ [Debug] 为了测试速度，暂时跳过语音合成...")
+    # 简单截取前 500 字做语音，防止朗读 URL 体验不好
+    text_to_read = state['final_report'][:500].replace("[", "").replace("]", "").replace("(", "").replace(")", "")
     
-    # 直接返回空数据，不进行任何耗时操作
-    return {
-        "audio_chinese_b64": "",
-        "audio_english_b64": "",
-        "logs": logs
-    }
-
-def ppt_node(state: AgentState):
-    """PPT 生成器"""
-    logs = state.get("logs", [])
-    logs.append("📊 [PPT Generator] 正在生成演示文稿...")
+    audio_b64 = ""
+    try:
+        communicate = edge_tts.Communicate(text_to_read, "zh-CN-YunxiNeural")
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+        audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+    except:
+        pass
     
-    prs = Presentation()
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "每日金融晨报"
-    slide.placeholders[1].text = "Powered by AlphaBrief.ai"
-    
-    # 简单内容页
-    slide2 = prs.slides.add_slide(prs.slide_layouts[1])
-    slide2.shapes.title.text = "核心摘要"
-    slide2.shapes.placeholders[1].text = state['report_chinese'][:500]
-    
-    from io import BytesIO
-    ppt_stream = BytesIO()
-    prs.save(ppt_stream)
-    ppt_stream.seek(0)
-    ppt_b64 = base64.b64encode(ppt_stream.read()).decode('utf-8')
-    
-    logs.append("✅ [PPT] 文档打包完成。")
-    return {"ppt_b64": ppt_b64, "logs": logs}
+    return {"audio_b64": audio_b64}
 
 # --- 4. 构建图 ---
 workflow = StateGraph(AgentState)
-workflow.add_node("news_scout", news_node)
-workflow.add_node("podcast_listener", podcast_node)
+workflow.add_node("macro_scout", search_node)
 workflow.add_node("chief_analyst", analyst_node)
 workflow.add_node("speech_synthesizer", speech_node)
-workflow.add_node("ppt_generator", ppt_node)
 
-workflow.set_entry_point("news_scout")
-workflow.add_edge("news_scout", "podcast_listener")
-workflow.add_edge("podcast_listener", "chief_analyst")
+workflow.set_entry_point("macro_scout")
+workflow.add_edge("macro_scout", "chief_analyst")
 workflow.add_edge("chief_analyst", "speech_synthesizer")
-workflow.add_edge("speech_synthesizer", "ppt_generator")
-workflow.add_edge("ppt_generator", END)
+workflow.add_edge("speech_synthesizer", END)
 
 app_graph = workflow.compile()
 
@@ -165,18 +158,14 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class ReportRequest(BaseModel):
-    topic: str = "今日市场"
+    topic: str = "Macro"
 
 @app.post("/generate_report")
 async def generate_report(req: ReportRequest):
     inputs = {"query": req.topic, "logs": []}
     result = await app_graph.ainvoke(inputs)
     return {
-        "report_chinese": result["report_chinese"],
-        "report_english": result["report_english"],
-        "sources": result["sources"],
+        "report": result["final_report"],
         "logs": result["logs"],
-        "audio_chinese_b64": result["audio_chinese_b64"],
-        "audio_english_b64": result["audio_english_b64"],
-        "ppt_b64": result["ppt_b64"]
+        "audio": result["audio_b64"]
     }
