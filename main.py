@@ -100,45 +100,17 @@ def analyst_node(state: AgentState):
     }
 
 # --- ⚠️ 核心修改: 使用 Edge TTS (异步) ---
-async def speech_node(state: AgentState):
-    """语音合成员 (Edge TTS 版)"""
+
+
+def speech_node(state: AgentState):
+    """调试模式：跳过语音合成"""
     logs = state.get("logs", [])
-    logs.append("🗣️ [Edge TTS] 正在调用微软 Neural 语音引擎...")
+    logs.append("⚠️ [Debug] 为了测试速度，暂时跳过语音合成...")
     
-    report_zh = state['report_chinese']
-    report_en = state['report_english']
-    
-    audio_chinese_b64 = ""
-    audio_english_b64 = ""
-
-    # 1. 生成中文语音 (推荐: zh-CN-YunxiNeural - 男声新闻腔)
-    try:
-        communicate = edge_tts.Communicate(report_zh[:50], "zh-CN-YunxiNeural")
-        # 将音频流写入内存
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        audio_chinese_b64 = base64.b64encode(audio_data).decode('utf-8')
-        logs.append("✅ [Edge TTS] 中文语音生成成功 (Free)。")
-    except Exception as e:
-        logs.append(f"❌ [Edge TTS] 中文生成失败: {str(e)}")
-
-    # 2. 生成英文语音 (推荐: en-US-ChristopherNeural - 男声专业腔)
-    try:
-        communicate = edge_tts.Communicate(report_en[:50], "en-US-ChristopherNeural")
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        audio_english_b64 = base64.b64encode(audio_data).decode('utf-8')
-        logs.append("✅ [Edge TTS] 英文语音生成成功 (Free)。")
-    except Exception as e:
-        logs.append(f"❌ [Edge TTS] 英文生成失败: {str(e)}")
-
+    # 直接返回空数据，不进行任何耗时操作
     return {
-        "audio_chinese_b64": audio_chinese_b64,
-        "audio_english_b64": audio_english_b64,
+        "audio_chinese_b64": "",
+        "audio_english_b64": "",
         "logs": logs
     }
 
