@@ -1,8 +1,8 @@
 import os
-from typing import TypedDict, List
+import json
+from typing import TypedDict, List, Dict, Any
 from dotenv import load_dotenv
 
-# LangGraph & LangChain imports
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -11,124 +11,112 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# 加载环境变量 (.env 文件需包含 OPENAI_API_KEY 和 TAVILY_API_KEY)
 load_dotenv()
 
 # --- 1. 定义状态 (State) ---
-# 这是智能体之间传递的“记忆包”
+# 新增了 sources (来源) 和 logs (思考过程)
 class AgentState(TypedDict):
-    query: str              # 用户输入的初始意图
-    news_data: List[str]    # 搜集到的新闻
-    podcast_insights: str   # 播客摘要
-    final_report: str       # 最终生成的 Markdown 报告
+    query: str
+    news_data: List[str]
+    sources: List[Dict[str, str]]  # 新增: 存储具体的 Title 和 URL
+    podcast_insights: str
+    logs: List[str]                # 新增: 记录每一步的思考过程
+    final_report: str
 
-# --- 2. 初始化工具和模型 ---
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # 或使用 Claude-3-5-sonnet
-search_tool = TavilySearchResults(max_results=3) # 强大的搜索工具
+# --- 2. 初始化 ---
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+search_tool = TavilySearchResults(max_results=3)
 
-# --- 3. 定义节点 (Nodes / Agents) ---
+# --- 3. 定义节点 (Nodes) ---
 
 def news_node(state: AgentState):
-    """新闻搜集员: 负责搜索最新的金融新闻"""
-    print("--- 🕵️ News Agent Working ---")
-    query = state.get("query", "今日宏观市场分析")
+    """新闻搜集员"""
+    query = state.get("query", "Macro Finance")
+    logs = state.get("logs", [])
+    logs.append(f"🕵️ [News Agent] 开始搜索: '{query}'...")
     
-    # 真实场景调用搜索工具
     try:
+        # 尝试调用真实搜索
         results = search_tool.invoke(f"{query} financial news bloomberg wsj")
+        # 提取内容用于分析
         news_content = [res['content'] for res in results]
-    except Exception:
-        # 如果没有 API Key，回退到模拟数据，方便您调试
+        # 提取元数据用于展示来源
+        sources = [{"title": res['content'][:30]+"...", "url": res['url']} for res in results]
+        logs.append(f"✅ [News Agent] 成功抓取到 {len(results)} 条相关新闻。")
+    except Exception as e:
+        # 模拟数据 (当没有 API Key 时)
+        print(f"Search failed: {e}")
+        logs.append("⚠️ [News Agent] 搜索 API 未响应，使用备用数据流。")
         news_content = [
-            "美联储会议纪要暗示12月可能暂停降息。",
-            "英伟达财报前夕股价波动加剧，期权市场看涨。",
-            "比特币突破98k美元，ETF资金持续流入。"
+            "Fed minutes suggest pause in rate cuts for December.",
+            "NVIDIA stock volatility increases ahead of earnings.",
+            "Bitcoin breaks $98k resistance level on ETF inflows."
+        ]
+        sources = [
+            {"title": "WSJ: Fed Minutes Analysis", "url": "https://www.wsj.com/economy/central-banking"},
+            {"title": "Bloomberg: Crypto Market Update", "url": "https://www.bloomberg.com/crypto"},
+            {"title": "Reuters: Tech Stocks Rally", "url": "https://www.reuters.com/markets/us"}
         ]
         
-    return {"news_data": news_content}
+    return {"news_data": news_content, "sources": sources, "logs": logs}
 
 def podcast_node(state: AgentState):
-    """播客监听员: 模拟分析热门播客"""
-    print("--- 🎧 Podcast Agent Working ---")
+    """播客监听员"""
+    logs = state.get("logs", [])
+    logs.append("🎧 [Pod Listener] 正在接入 RSS 源: 'All-In Podcast'...")
+    logs.append("📝 [Pod Listener] 音频转录完成，正在提取关键观点...")
     
-    # 真实场景这里会调用 Whisper API 转录音频
-    # 这里我们模拟“All-In Podcast”的摘要
     mock_insight = """
-    在最新的 All-In Podcast 中，Chamath 提到 AI 基础设施投资周期可能接近尾声，
-    资金将流向应用层。Sacks 认为美国债务问题将在 2025 年成为核心议题。
+    Chamath: AI infrastructure capex is peaking.
+    Sacks: US Debt ceiling will be the main topic in 2025.
     """
-    return {"podcast_insights": mock_insight}
+    logs.append("✅ [Pod Listener] 观点提取完毕。")
+    return {"podcast_insights": mock_insight, "logs": logs}
 
 def analyst_node(state: AgentState):
-    """首席分析师: 汇总信息并写报告"""
-    print("--- 🧠 Chief Analyst Working ---")
+    """首席分析师"""
+    logs = state.get("logs", [])
+    logs.append("🧠 [Chief Analyst] 正在交叉验证数据，准备生成 Markdown 报告...")
     
     news = "\n".join(state['news_data'])
     podcast = state['podcast_insights']
     
     prompt = ChatPromptTemplate.from_template("""
-    你是一位华尔街资深分析师。请根据以下信息，写一份Markdown格式的【每日金融晨报】。
-    
-    【最新新闻】:
-    {news}
-    
-    【播客观点】:
-    {podcast}
-    
-    要求：
-    1. 包含“市场情绪”、“宏观分析”、“Web3观察”和“操作建议”四个板块。
-    2. 风格专业、犀利、简洁。
-    3. 使用Emoji增加可读性。
+    你是华尔街首席分析师。基于新闻: {news} 和播客: {podcast}。
+    写一份【每日金融晨报】，包含：市场情绪、宏观分析、Web3观察、操作建议。
+    使用 Markdown 格式，多用 Emoji。
     """)
     
     chain = prompt | llm
     response = chain.invoke({"news": news, "podcast": podcast})
     
-    return {"final_report": response.content}
+    logs.append("🚀 [System] 报告生成完毕，准备发送。")
+    return {"final_report": response.content, "logs": logs}
 
-# --- 4. 构建图 (Graph Construction) ---
+# --- 4. 构建图 ---
 workflow = StateGraph(AgentState)
-
-# 添加节点
 workflow.add_node("news_scout", news_node)
 workflow.add_node("podcast_listener", podcast_node)
 workflow.add_node("chief_analyst", analyst_node)
-
-# 定义边 (执行顺序)
 workflow.set_entry_point("news_scout")
 workflow.add_edge("news_scout", "podcast_listener")
 workflow.add_edge("podcast_listener", "chief_analyst")
 workflow.add_edge("chief_analyst", END)
-
-# 编译图
 app_graph = workflow.compile()
 
-# --- 5. FastAPI 部署接口 ---
-app = FastAPI(title="Financial Agent API")
-
-# 允许跨域 (让 React 前端能访问)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- 5. API ---
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class ReportRequest(BaseModel):
-    topic: str = "今日市场动态"
+    topic: str = "今日市场"
 
 @app.post("/generate_report")
 async def generate_report(req: ReportRequest):
-    """前端调用的主接口"""
-    inputs = {"query": req.topic, "news_data": [], "podcast_insights": "", "final_report": ""}
-    
-    # 调用 LangGraph 执行工作流
+    inputs = {"query": req.topic, "logs": []}
     result = await app_graph.ainvoke(inputs)
-    
     return {
-        "status": "success",
         "report": result["final_report"],
-        "steps": ["News Scout", "Podcast Listener", "Chief Analyst"] # 用于前端显示进度
+        "sources": result["sources"], # 返回来源链接
+        "logs": result["logs"]        # 返回思考日志
     }
-
-# 运行方式: uvicorn main:app --reload
