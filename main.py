@@ -113,7 +113,7 @@ async def speech_node(state: AgentState):
 
     # 1. 生成中文语音 (推荐: zh-CN-YunxiNeural - 男声新闻腔)
     try:
-        communicate = edge_tts.Communicate(report_zh[:2000], "zh-CN-YunxiNeural")
+        communicate = edge_tts.Communicate(report_zh[:50], "zh-CN-YunxiNeural")
         # 将音频流写入内存
         audio_data = b""
         async for chunk in communicate.stream():
@@ -126,7 +126,7 @@ async def speech_node(state: AgentState):
 
     # 2. 生成英文语音 (推荐: en-US-ChristopherNeural - 男声专业腔)
     try:
-        communicate = edge_tts.Communicate(report_en[:2000], "en-US-ChristopherNeural")
+        communicate = edge_tts.Communicate(report_en[:50], "en-US-ChristopherNeural")
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
