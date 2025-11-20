@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
 # 切换为 Google Gemini
-from langchain_google_genai import ChatGoogleGenerativeAI 
+#from langchain_google_genai import ChatGoogleGenerativeAI 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools.tavily_search import TavilySearchResults
 from fastapi import FastAPI, Response
@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pptx import Presentation
 import edge_tts # 引入 Edge TTS
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
@@ -34,11 +35,15 @@ class AgentState(TypedDict):
 
 # --- 2. 初始化 ---
 # 使用 Gemini 1.5 Flash (免费且快)
-llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash-001",
-    temperature=0,
-    google_api_key=os.getenv("GOOGLE_API_KEY")
+# --- 2. 初始化 ---
+# 使用 DeepSeek V3 (性价比之王)
+llm = ChatOpenAI(
+    model="deepseek-chat", 
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com",  # ⬅️ 关键：指向 DeepSeek 官方地址
+    temperature=0
 )
+
 search_tool = TavilySearchResults(max_results=3)
 
 # --- 3. 定义节点 ---
